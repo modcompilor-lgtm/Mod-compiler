@@ -124,6 +124,57 @@ object CleoCompiler {
       }
     }
 
+    // Alias legibles para variables locales declaradas como int/float/string.
+    // Se reservan primero los índices explícitos para no pisar 0@, 1@, etc.
+    val reservedLocalIndices = Regex("\\b(\\d+)@").findAll(sourceCode)
+      .mapNotNull { it.groupValues[1].toIntOrNull() }
+      .toMutableSet()
+    var nextNamedLocal = 0
+    val localAliases = linkedMapOf<String, Int>()
+
+    fun allocateNamedLocal(): Int {
+      while (reservedLocalIndices.contains(nextNamedLocal)) nextNamedLocal++
+      return nextNamedLocal.also {
+        reservedLocalIndices.add(it)
+        nextNamedLocal++
+      }
+    }
+
+    fun replaceLocalAliases(line: String): String {
+      if (localAliases.isEmpty()) return line
+      val result = StringBuilder()
+      val token = StringBuilder()
+      var quote: Char? = null
+      var escaped = false
+
+      fun flushToken() {
+        if (token.isEmpty()) return
+        val replacement = localAliases[token.toString().lowercase()]
+        if (replacement == null) result.append(token) else result.append(replacement).append('@')
+        token.clear()
+      }
+
+      for (character in line) {
+        if (quote != null) {
+          result.append(character)
+          if (escaped) escaped = false
+          else if (character == '\\') escaped = true
+          else if (character == quote) quote = null
+        } else if (character == '\'' || character == '"') {
+          flushToken()
+          quote = character
+          result.append(character)
+        } else if (character.isLetterOrDigit() || character == '_') {
+          token.append(character)
+        } else {
+          flushToken()
+          result.append(character)
+        }
+      }
+      flushToken()
+      return result.toString()
+    }
+
     // =========================================================================
     // FASE 0: Parseo léxico y sintáctico línea por línea
     // =========================================================================
@@ -143,6 +194,26 @@ object CleoCompiler {
       if (clean.isEmpty()) {
         return@forEachIndexed
       }
+
+      // Declaraciones legibles de variables locales: int counter / float distance.
+      val localDeclaration = Regex("^(int|float|string)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*=\\s*(.+))?$", RegexOption.IGNORE_CASE).find(clean)
+      if (localDeclaration != null) {
+        val name = localDeclaration.groupValues[2].lowercase()
+        val localIndex = localAliases.getOrPut(name) { allocateNamedLocal() }
+        val initializer = localDeclaration.groupValues.getOrNull(3)?.trim().orEmpty()
+        if (initializer.isEmpty()) return@forEachIndexed
+        clean = "${localIndex}@ = ${initializer}"
+      }
+
+      // Declaraciones globales tipadas: $name: int = 10.
+      val globalDeclaration = Regex("^\\$([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*(int|float|string)(?:\\s*=\\s*(.+))?$", RegexOption.IGNORE_CASE).find(clean)
+      if (globalDeclaration != null) {
+        val initializer = globalDeclaration.groupValues.getOrNull(3)?.trim().orEmpty()
+        if (initializer.isEmpty()) return@forEachIndexed
+        clean = "\${globalDeclaration.groupValues[1]} = ${initializer}"
+      }
+
+      clean = replaceLocalAliases(clean)
 
       // Bloques HEX..END
       val lowerClean = clean.lowercase()
