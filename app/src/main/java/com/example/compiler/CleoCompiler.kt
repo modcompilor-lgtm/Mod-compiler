@@ -87,7 +87,8 @@ object CleoCompiler {
   fun compile(sourceCode: String): CompilationResult {
     val startTimeNanos = System.nanoTime()
 
-    val lines = sourceCode.lines()
+    val normalizedSource = normalizeStructuredSyntax(sourceCode)
+    val lines = normalizedSource.lines()
     if (lines.all { it.isBlank() || it.trim().startsWith("//") || it.trim().startsWith(";") || it.trim().startsWith("#") }) {
       return CompilationResult.Failure(
         CompilationError(
@@ -498,6 +499,103 @@ object CleoCompiler {
     )
   }
 
+  /**
+   * Expande el control estructurado de Sanny Builder a saltos CLEO explícitos.
+   * El usuario escribe if/then/else/end y el backend genera etiquetas temporales.
+   */
+  private fun normalizeStructuredSyntax(sourceCode: String): String {
+    data class IfFrame(
+      val id: Int,
+      val mode: String,
+      val elseLabel: String,
+      val endLabel: String,
+      val bodyLabel: String?,
+      val conditions: MutableList<String> = mutableListOf(),
+      var collectingConditions: Boolean = true,
+      var hasElse: Boolean = false
+    )
+
+    val output = mutableListOf<String>()
+    val frames = java.util.ArrayDeque<IfFrame>()
+    var nextId = 0
+    var insideHexBlock = false
+
+    fun emitConditions(frame: IfFrame) {
+      val conditions = frame.conditions.filter { line ->
+        val trimmed = line.trim()
+        trimmed.isNotEmpty() && !trimmed.startsWith("//") && !trimmed.startsWith(";") && !trimmed.startsWith("#")
+      }
+      if (frame.mode == "or") {
+        val bodyLabel = frame.bodyLabel ?: return
+        conditions.forEachIndexed { index, condition ->
+          val nextCondition = "${frame.elseLabel}_OR_$index"
+          output.add(condition)
+          output.add("004D: jump_if_false @$nextCondition")
+          output.add("0002: jump @$bodyLabel")
+          output.add(":$nextCondition")
+        }
+        output.add("0002: jump @${frame.elseLabel}")
+        output.add(":$bodyLabel")
+      } else {
+        conditions.forEach { condition ->
+          output.add(condition)
+          output.add("004D: jump_if_false @${frame.elseLabel}")
+        }
+      }
+    }
+
+    for (rawLine in sourceCode.lines()) {
+      val trimmed = rawLine.trim()
+      if (trimmed.equals("hex", ignoreCase = true)) {
+        insideHexBlock = true
+        output.add(rawLine)
+        continue
+      }
+      if (insideHexBlock) {
+        output.add(rawLine)
+        if (trimmed.equals("end", ignoreCase = true)) insideHexBlock = false
+        continue
+      }
+
+      val activeFrame = frames.peekLast()
+      if (activeFrame != null && activeFrame.collectingConditions) {
+        if (trimmed.equals("then", ignoreCase = true)) {
+          emitConditions(activeFrame)
+          activeFrame.collectingConditions = false
+        } else {
+          activeFrame.conditions.add(rawLine)
+        }
+        continue
+      }
+
+      val ifMatch = Regex("^if(?:\\s+(and|or))?\\s*$", RegexOption.IGNORE_CASE).matches(trimmed)
+      if (ifMatch) {
+        val mode = Regex("^if(?:\\s+(and|or))?", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.lowercase() ?: "single"
+        val id = nextId++
+        frames.addLast(IfFrame(id, mode, "__IF_ELSE_$id", "__IF_END_$id", if (mode == "or") "__IF_BODY_$id" else null))
+        continue
+      }
+
+      if (trimmed.equals("else", ignoreCase = true) && frames.isNotEmpty()) {
+        val frame = frames.peekLast()
+        frame.hasElse = true
+        output.add("0002: jump @${frame.endLabel}")
+        output.add(":${frame.elseLabel}")
+        continue
+      }
+
+      if (trimmed.equals("end", ignoreCase = true) && frames.isNotEmpty()) {
+        val frame = frames.removeLast()
+        if (!frame.hasElse) output.add(":${frame.elseLabel}")
+        output.add(":${frame.endLabel}")
+        continue
+      }
+
+      output.add(rawLine)
+    }
+
+    return if (frames.isEmpty() && !insideHexBlock) output.joinToString("\n") else sourceCode
+  }
   fun inferScriptName(sourceCode: String, targetExtension: String = "csa"): String {
     val cleanExt = targetExtension.trim().removePrefix(".").lowercase().ifEmpty { "csa" }
     val lines = sourceCode.lines()
