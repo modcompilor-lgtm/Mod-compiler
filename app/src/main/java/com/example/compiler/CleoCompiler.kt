@@ -137,8 +137,8 @@ object CleoCompiler {
         return@forEachIndexed
       }
 
-      // Remover comentarios inline (// o ; o #)
-      clean = clean.split("//", ";").first().trim()
+      // Remover comentarios inline sin cortar // o ; dentro de una cadena.
+      clean = stripInlineComment(clean)
       if (clean.isEmpty()) {
         return@forEachIndexed
       }
@@ -688,8 +688,7 @@ object CleoCompiler {
 
       // 03A4: name_thread 'MYMOD'
       0x03A4 -> {
-        val stringMatch = Regex("['\"]([^'\"]+)['\"]").find(argumentsRest)
-        val name = stringMatch?.groupValues?.get(1)
+        val name = extractQuotedStrings(argumentsRest).second.firstOrNull()
           ?: argumentsRest.substringAfter("name_thread").trim().removeSurrounding("'", "'").removeSurrounding("\"", "\"")
 
         if (name.isBlank()) {
@@ -708,8 +707,8 @@ object CleoCompiler {
 
       // 0ACA: show_text_box "Texto"
       0x0ACA -> {
-        val stringMatch = Regex("['\"]([^'\"]+)['\"]").find(argumentsRest)
-        val text = stringMatch?.groupValues?.get(1) ?: argumentsRest.substringAfter("show_text_box").trim()
+        val text = extractQuotedStrings(argumentsRest).second.firstOrNull()
+          ?: argumentsRest.substringAfter("show_text_box").trim()
         if (text.isBlank()) {
           return ParseResult.Error(
             CompilationError(
@@ -726,17 +725,10 @@ object CleoCompiler {
     }
 
     // Tokenizador inteligente para opcodes estándar
-    val quotedStrings = mutableListOf<String>()
-    var processedArgs = argumentsRest
-
-    // Extraer strings con comillas simples y dobles
-    Regex("(['\"])(.*?)\\1").findAll(argumentsRest).forEachIndexed { i, match ->
-      val fullMatch = match.value
-      val content = match.groupValues[2]
-      val placeholder = " __STR_${i}__ "
-      quotedStrings.add(content)
-      processedArgs = processedArgs.replace(fullMatch, placeholder)
-    }
+    // Extraer strings con comillas simples/dobles respetando escapes y espacios.
+    val extractedStrings = extractQuotedStrings(argumentsRest)
+    var processedArgs = extractedStrings.first
+    val quotedStrings = extractedStrings.second
 
     // Detectar si la instrucción fue escrita como asignación: DEST = CMD ARGS...
     var assignmentDestToken: String? = null
@@ -873,19 +865,8 @@ object CleoCompiler {
         continue
       }
 
-      // 6. Entero hexadecimal (ej. 0x1000)
-      if (trimmed.startsWith("0x", ignoreCase = true) || trimmed.startsWith("-0x", ignoreCase = true)) {
-        val isNegative = trimmed.startsWith("-")
-        val cleanHex = trimmed.removePrefix("-").removePrefix("0x").removePrefix("0X")
-        val intVal = cleanHex.toIntOrNull(16)
-        if (intVal != null) {
-          params.add(ScriptParam.IntVal(if (isNegative) -intVal else intVal))
-          continue
-        }
-      }
-
-      // 7. Entero decimal estándar (ej. 250, -1, 1000)
-      val intVal = trimmed.toIntOrNull()
+      // 6/7. Enteros decimal, hexadecimal (0x) y binario (0b).
+      val intVal = parseIntegerLiteral(trimmed)
       if (intVal != null) {
         params.add(ScriptParam.IntVal(intVal))
         continue
@@ -955,6 +936,122 @@ object CleoCompiler {
     }
 
     return ParseResult.Success(params)
+  }
+
+  /**
+   * Elimina comentarios sin interpretar los marcadores dentro de strings.
+   * Sanny permite texto como "URL // ejemplo; no es comentario".
+   */
+  private fun stripInlineComment(line: String): String {
+    var quote: Char? = null
+    var escaped = false
+    var index = 0
+
+    while (index < line.length) {
+      val current = line[index]
+      if (quote != null) {
+        if (escaped) {
+          escaped = false
+        } else if (current == '\\') {
+          escaped = true
+        } else if (current == quote) {
+          quote = null
+        }
+      } else {
+        when {
+          current == '\'' || current == '"' -> quote = current
+          current == ';' -> return line.substring(0, index).trim()
+          current == '/' && index + 1 < line.length && line[index + 1] == '/' -> {
+            return line.substring(0, index).trim()
+          }
+        }
+      }
+      index++
+    }
+    return line.trim()
+  }
+
+  /**
+   * Sustituye literales entre comillas por tokens internos sin romper espacios,
+   * comillas escapadas ni marcadores de comentario.
+   */
+  private fun extractQuotedStrings(input: String): Pair<String, List<String>> {
+    val processed = StringBuilder()
+    val values = mutableListOf<String>()
+    var index = 0
+
+    while (index < input.length) {
+      val current = input[index]
+      if (current != '\'' && current != '"') {
+        processed.append(current)
+        index++
+        continue
+      }
+
+      val quote = current
+      val start = index
+      index++
+      val value = StringBuilder()
+      var escaped = false
+      var closed = false
+
+      while (index < input.length) {
+        val character = input[index++]
+        if (escaped) {
+          value.append(
+            when (character) {
+              'n' -> '\n'
+              'r' -> '\r'
+              't' -> '\t'
+              '\\' -> '\\'
+              '\'' -> '\''
+              '"' -> '"'
+              else -> character
+            }
+          )
+          escaped = false
+        } else if (character == '\\') {
+          escaped = true
+        } else if (character == quote) {
+          closed = true
+          break
+        } else {
+          value.append(character)
+        }
+      }
+
+      if (!closed) {
+        // Dejar que la validación normal produzca un error de sintaxis.
+        processed.append(input.substring(start))
+        break
+      }
+
+      val stringIndex = values.size
+      values.add(value.toString())
+      processed.append(" __STR_").append(stringIndex).append("__ ")
+    }
+
+    return processed.toString() to values
+  }
+
+  /** Acepta enteros decimales, hexadecimales (0x) y binarios (0b). */
+  private fun parseIntegerLiteral(token: String): Int? {
+    val clean = token.trim()
+    val negative = clean.startsWith('-')
+    val unsigned = clean.removePrefix("-").removePrefix("+")
+    val radix = when {
+      unsigned.startsWith("0x", ignoreCase = true) -> 16
+      unsigned.startsWith("0b", ignoreCase = true) -> 2
+      else -> 10
+    }
+    val digits = when (radix) {
+      16 -> unsigned.substring(2)
+      2 -> unsigned.substring(2)
+      else -> unsigned
+    }
+    val parsed = digits.toLongOrNull(radix) ?: return null
+    val signed = if (negative) -parsed else parsed
+    return signed.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
   }
 
   private fun isLocalVarToken(token: String): Boolean =
