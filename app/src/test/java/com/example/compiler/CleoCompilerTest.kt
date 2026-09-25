@@ -86,4 +86,55 @@ class CleoCompilerTest {
     assertEquals("01 00 04 0A 93 0A", result.hexDump)
   }
 
+
+  @Test
+  fun supportsSannyIfThenElseBlocks() {
+    val result = CleoCompiler.compile(
+      """
+      if
+        0@ > 0
+      then
+        0001: wait 0
+      else
+        0001: wait 1
+      end
+      0A93: end_custom_thread
+      """.trimIndent()
+    )
+
+    assertTrue(result is CompilationResult.Success)
+    result as CompilationResult.Success
+    assertTrue(result.hexDump.contains("4D 00"))
+    assertTrue(result.hexDump.contains("02 00"))
+  }
+
+  @Test
+  fun supportsAndAndOrConditionBlocks() {
+    val andResult = CleoCompiler.compile(
+      """
+      if and
+        0@ > 0
+        1@ == 1
+      then
+        0001: wait 0
+      end
+      0A93: end_custom_thread
+      """.trimIndent()
+    )
+    val orResult = CleoCompiler.compile(
+      """
+      if or
+        0@ > 0
+        1@ == 1
+      then
+        0001: wait 0
+      end
+      0A93: end_custom_thread
+      """.trimIndent()
+    )
+
+    assertTrue(andResult is CompilationResult.Success)
+    assertTrue(orResult is CompilationResult.Success)
+  }
+
 }
