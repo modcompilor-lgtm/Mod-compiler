@@ -113,15 +113,6 @@ jobs:
             echo "Copied AAB to release-output/CompilerStudio.aab"
           fi
 
-      - name: Upload Release Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: CompilerStudio-Release
-          path: |
-            release-output/CompilerStudio.apk
-            release-output/CompilerStudio.aab
-          if-no-files-found: error
-
       - name: Determine Release Tag
         id: release-tag
         run: |
@@ -134,29 +125,25 @@ jobs:
           fi
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      - name: Publish to GitHub Releases
+      - name: Publish Direct to GitHub Releases
         if: github.event_name != 'pull_request'
-        run: |
-          TAG="${{ steps.release-tag.outputs.tag_name }}"
-          TITLE="Compiler Studio - $TAG"
-          echo "Publishing release $TAG..."
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG exists, updating assets..."
-            gh release upload "$TAG" \
-              release-output/CompilerStudio.apk \
-              release-output/CompilerStudio.aab \
-              --clobber
-          else
-            echo "Creating new release $TAG..."
-            gh release create "$TAG" \
-              release-output/CompilerStudio.apk \
-              release-output/CompilerStudio.aab \
-              --title "$TITLE" \
-              --notes "### Compiler Studio para Android ($TAG)
-              
-              Descarga directa de los archivos de instalación:
-              - **CompilerStudio.apk**: Archivo APK listo para instalar en cualquier dispositivo Android.
-              - **CompilerStudio.aab**: Paquete Android App Bundle oficial para Google Play Store."
-          fi
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-tag.outputs.tag_name }}
+          name: "Compiler Studio ${{ steps.release-tag.outputs.tag_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 📱 Compiler Studio ${{ steps.release-tag.outputs.tag_name }}
+            
+            Compilador nativo de scripts CLEO (.csa / .csi) para GTA San Andreas Android.
+            
+            ### ⬇️ Descargas directas:
+            - **CompilerStudio.apk**: Archivo APK listo para instalar en cualquier dispositivo Android.
+            - **CompilerStudio.aab**: Android App Bundle oficial para distribución o Google Play.
+          files: |
+            release-output/CompilerStudio.apk
+            release-output/CompilerStudio.aab
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
