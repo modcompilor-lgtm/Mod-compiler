@@ -1,0 +1,162 @@
+name: Build & Release Android App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Etiqueta de la versión (ej. v1.0.0)'
+        required: false
+        type: string
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Compiler Studio - Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure .env exists for Secrets Gradle Plugin
+        run: |
+          if [ ! -f .env ]; then
+            if [ -f .env.example ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Setup Keystore & Signing Credentials
+        run: |
+          # Si existen secrets en el repositorio de GitHub se usan prioritariamente:
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Using custom release keystore from GitHub Secrets..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/my-upload-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=${{ secrets.STORE_PASSWORD }}" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+          elif [ -f debug.keystore.base64 ]; then
+            echo "Using default project keystore base64..."
+            base64 -d debug.keystore.base64 > my-upload-key.jks
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/my-upload-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          else
+            echo "Generating self-signed release keystore..."
+            keytool -genkeypair -v \
+              -keystore my-upload-key.jks \
+              -alias upload \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=CompilerStudio, OU=Dev, O=App, L=City, ST=State, C=US"
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/my-upload-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          fi
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Build Release App Bundle (AAB)
+        run: ./gradlew bundleRelease --no-daemon
+
+      - name: Prepare Release Artifacts (Compiler Studio)
+        run: |
+          mkdir -p release-output
+          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" release-output/CompilerStudio.apk
+            echo "Copied APK to release-output/CompilerStudio.apk"
+          fi
+          AAB_FILE=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          if [ -n "$AAB_FILE" ]; then
+            cp "$AAB_FILE" release-output/CompilerStudio.aab
+            echo "Copied AAB to release-output/CompilerStudio.aab"
+          fi
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CompilerStudio-Release
+          path: |
+            release-output/CompilerStudio.apk
+            release-output/CompilerStudio.aab
+          if-no-files-found: error
+
+      - name: Determine Release Tag
+        id: release-tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG_NAME="${{ github.event.inputs.release_tag }}"
+          else
+            TAG_NAME="v1.0.${{ github.run_number }}"
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Publish to GitHub Releases
+        if: github.event_name != 'pull_request'
+        run: |
+          TAG="${{ steps.release-tag.outputs.tag_name }}"
+          TITLE="Compiler Studio - $TAG"
+          echo "Publishing release $TAG..."
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists, updating assets..."
+            gh release upload "$TAG" \
+              release-output/CompilerStudio.apk \
+              release-output/CompilerStudio.aab \
+              --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" \
+              release-output/CompilerStudio.apk \
+              release-output/CompilerStudio.aab \
+              --title "$TITLE" \
+              --notes "### Compiler Studio para Android ($TAG)
+              
+              Descarga directa de los archivos de instalación:
+              - **CompilerStudio.apk**: Archivo APK listo para instalar en cualquier dispositivo Android.
+              - **CompilerStudio.aab**: Paquete Android App Bundle oficial para Google Play Store."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
