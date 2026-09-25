@@ -767,11 +767,48 @@ object CleoCompiler {
       "car", "vehicle", "object", "player", "model", "position", "position_to", "immunities",
       "health", "armour", "armor", "money", "add_money", "weapon", "ammo", "weather",
       "fade", "time", "set", "get", "store", "and", "or", "not", "jump", "jump_if_false",
-      "end_thread", "create_thread", "gosub", "return", "=", "+=", "-=", "*=", "/=", "==", ">=", "<=", "<>", "!="
+      "end_thread", "create_thread", "gosub", "return", "=", "+=", "-=", "*=", "/=", "==", ">=", "<=", "<>", "!=",
+      "phrase", "can_move", "abs", "driving", "control", "key_pressed", "as_only_one_available_for_gangwars",
+      "as", "only", "one", "available", "for", "gangwars", "zone", "gang", "can", "move"
     )
 
-    val commandWords = (opcodeDef.commandName.lowercase().split("_") +
-        listOf(opcodeDef.commandName.lowercase(), opcodeDef.commandName.lowercase().replace("_", ""))).toSet()
+    val embeddedDef = CleoOpcodeDatabase.getEmbedded(cleanOpcode)
+    val commandWords = mutableSetOf<String>()
+    fun addCommandNameWords(name: String) {
+      val lower = name.lowercase()
+      commandWords.add(lower)
+      commandWords.add(lower.replace("_", ""))
+      commandWords.addAll(lower.split("_").filter { it.isNotEmpty() })
+    }
+    addCommandNameWords(opcodeDef.commandName)
+    embeddedDef?.let { addCommandNameWords(it.commandName) }
+
+    fun addExampleWords(example: String) {
+      Regex("[A-Za-z_][A-Za-z0-9_]*").findAll(example).forEach { m ->
+        val w = m.value.lowercase()
+        if (w !in gtaModels && !w.startsWith("str_")) {
+          commandWords.add(w)
+          commandWords.addAll(w.split("_").filter { it.isNotEmpty() })
+        }
+      }
+    }
+    addExampleWords(opcodeDef.example)
+    embeddedDef?.let { addExampleWords(it.example) }
+
+    // Si el primer token tras el opcode es un identificador alfabético (ej. 01B6: set_weather 1),
+    // se trata del mnemónico o nombre de comando del script.
+    val firstToken = rawTokens.firstOrNull()?.trim()
+    if (firstToken != null &&
+      Regex("^[A-Za-z_][A-Za-z0-9_]*$").matches(firstToken) &&
+      !firstToken.equals("true", ignoreCase = true) &&
+      !firstToken.equals("false", ignoreCase = true) &&
+      !gtaModels.containsKey(firstToken.uppercase())
+    ) {
+      val ftLower = firstToken.lowercase()
+      commandWords.add(ftLower)
+      commandWords.add(ftLower.replace("_", ""))
+      commandWords.addAll(ftLower.split("_").filter { it.isNotEmpty() })
+    }
 
     for (token in rawTokens) {
       val trimmed = token.trim()
@@ -897,7 +934,10 @@ object CleoCompiler {
       }
     }
 
-    if (params.size < opcodeDef.minParams || params.size > opcodeDef.maxParams) {
+    val minAllowed = if (assignmentDestToken != null) minOf(opcodeDef.minParams, 1) else opcodeDef.minParams
+    val maxAllowed = if (assignmentDestToken != null) maxOf(opcodeDef.maxParams, opcodeDef.maxParams + 1) else opcodeDef.maxParams
+
+    if (params.size < minAllowed || params.size > maxAllowed) {
       val expectedText = if (opcodeDef.minParams == opcodeDef.maxParams) {
         "${opcodeDef.minParams}"
       } else {

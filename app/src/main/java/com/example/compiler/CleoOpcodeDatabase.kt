@@ -41,14 +41,24 @@ object CleoOpcodeDatabase {
 
   private val officialOpcodes = mutableMapOf<Int, OpcodeDef>()
   private val customOpcodes = mutableMapOf<Int, OpcodeDef>()
+  private val embeddedOpcodes = mutableMapOf<Int, OpcodeDef>()
 
   init {
     loadEmbeddedOpcodes()
     tryAutoLoadJson()
   }
 
+  fun getEmbedded(opcode: Int): OpcodeDef? = embeddedOpcodes[opcode]
+
   fun registerOfficial(def: OpcodeDef) {
-    officialOpcodes[def.opcode] = def.copy(isCustom = false)
+    val existing = embeddedOpcodes[def.opcode]
+    val maxParams = if (def.opcode == 0x0094 || def.opcode == 0x0095 || def.opcode == 0x0096) 2 else def.maxParams
+    val example = if (existing != null) "${def.example} ${existing.example}" else def.example
+    officialOpcodes[def.opcode] = def.copy(
+      isCustom = false,
+      maxParams = maxOf(def.maxParams, maxParams),
+      example = example
+    )
   }
 
   fun registerCustom(def: OpcodeDef) {
@@ -616,6 +626,9 @@ object CleoOpcodeDatabase {
       OpcodeDef(0x0672, "0672", "task_kill_char_on_foot", "Ordena al personaje atacar y eliminar a otro personaje a pie", 2, 2, emptyList(), "0672: task_kill_char_on_foot \$ACTOR \$TARGET", "Tareas de Peds"),
       OpcodeDef(0x06E5, "06E5", "task_die", "Fuerza la muerte con animación inmediata del personaje", 1, 1, emptyList(), "06E5: task_die \$ACTOR", "Tareas de Peds")
     )
-    defaultList.forEach { registerOfficial(it) }
+    defaultList.forEach {
+      embeddedOpcodes[it.opcode] = it
+      registerOfficial(it)
+    }
   }
 }
