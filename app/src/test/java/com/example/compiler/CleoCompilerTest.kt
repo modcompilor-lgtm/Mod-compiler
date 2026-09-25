@@ -67,4 +67,23 @@ class CleoCompilerTest {
     result as CompilationResult.Failure
     assertEquals(CompilerErrorType.INVALID_PARAMETERS, result.error.type)
   }
+
+  @Test
+  fun keepsCommentMarkersInsideQuotedText() {
+    val result = CleoCompiler.compile("0ACA: show_text_box \"A; B // C\"")
+
+    assertTrue(result is CompilationResult.Success)
+    result as CompilationResult.Success
+    assertTrue(result.hexDump.contains("41 3B 20 42 20 2F 2F 20 43"))
+  }
+
+  @Test
+  fun acceptsBinaryIntegerLiterals() {
+    val result = CleoCompiler.compile("0001: wait 0b1010")
+
+    assertTrue(result is CompilationResult.Success)
+    result as CompilationResult.Success
+    assertEquals("01 00 04 0A 93 0A", result.hexDump)
+  }
+
 }
