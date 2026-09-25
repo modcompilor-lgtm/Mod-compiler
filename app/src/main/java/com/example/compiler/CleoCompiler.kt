@@ -656,7 +656,7 @@ object CleoCompiler {
         var timeParam: ScriptParam? = null
         for (token in tokens) {
           if (token.equals("wait", true) || token.equals("ms", true) || token.equals("sec", true)) continue
-          val num = token.toIntOrNull()
+          val num = parseIntegerLiteral(token)
           if (num != null) {
             timeParam = ScriptParam.IntVal(num)
             break
