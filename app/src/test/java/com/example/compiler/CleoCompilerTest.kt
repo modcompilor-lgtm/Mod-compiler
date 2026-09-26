@@ -163,7 +163,7 @@ class CleoCompilerTest {
   fun supportsTypedGlobalDeclarations() {
     val result = CleoCompiler.compile(
       """
-      ${': int = 7
+      ${'$'}score: int = 7
       0001: wait ${'$'}score
       0A93: end_custom_thread
       """.trimIndent()
@@ -171,24 +171,4 @@ class CleoCompilerTest {
 
     assertTrue(result is CompilationResult.Success)
   }
-
-}
-}score: int = 7
-      0001: wait ${'
-      0A93: end_custom_thread
-      """.trimIndent()
-    )
-
-    assertTrue(result is CompilationResult.Success)
-  }
-
-}
-}score
-      0A93: end_custom_thread
-      """.trimIndent()
-    )
-
-    assertTrue(result is CompilationResult.Success)
-  }
-
 }
