@@ -137,4 +137,39 @@ class CleoCompilerTest {
     assertTrue(orResult is CompilationResult.Success)
   }
 
+
+  @Test
+  fun supportsNamedLocalDeclarationsInExpressionsAndCommands() {
+    val result = CleoCompiler.compile(
+      """
+      int counter = 10
+      float distance
+      distance = 1.5
+      if
+        counter > 0
+      then
+        0001: wait counter
+      end
+      0A93: end_custom_thread
+      """.trimIndent()
+    )
+
+    assertTrue(result is CompilationResult.Success)
+    result as CompilationResult.Success
+    assertTrue(result.bytecode.isNotEmpty())
+  }
+
+  @Test
+  fun supportsTypedGlobalDeclarations() {
+    val result = CleoCompiler.compile(
+      """
+      4score: int = 7
+      0001: wait 4score
+      0A93: end_custom_thread
+      """.trimIndent()
+    )
+
+    assertTrue(result is CompilationResult.Success)
+  }
+
 }
