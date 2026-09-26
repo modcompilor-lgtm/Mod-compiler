@@ -210,7 +210,7 @@ object CleoCompiler {
       if (globalDeclaration != null) {
         val initializer = globalDeclaration.groupValues.getOrNull(3)?.trim().orEmpty()
         if (initializer.isEmpty()) return@forEachIndexed
-        clean = "\${globalDeclaration.groupValues[1]} = ${initializer}"
+        clean = "\$" + globalDeclaration.groupValues[1] + " = " + initializer
       }
 
       clean = replaceLocalAliases(clean)
