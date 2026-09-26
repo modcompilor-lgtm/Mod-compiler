@@ -164,7 +164,7 @@ class CleoCompilerTest {
     val result = CleoCompiler.compile(
       """
       ${': int = 7
-      0001: wait 4score
+      0001: wait ${'$'}score
       0A93: end_custom_thread
       """.trimIndent()
     )
